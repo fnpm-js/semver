@@ -1,9 +1,7 @@
 use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use fnpm_semver::{
-    JsrPackageReq, JsrVersionSpec, NpmPackageReq, NpmVersionSpec, PackageReq, Version,
-};
+use fnpm_semver::{PackageReq, PackageType, Version, VersionSpec};
 
 fn bench_version_parse(c: &mut Criterion) {
     let mut group = c.benchmark_group("version_parse");
@@ -25,22 +23,22 @@ fn bench_version_parse(c: &mut Criterion) {
 fn bench_npm_version_spec_parse(c: &mut Criterion) {
     let mut group = c.benchmark_group("npm_version_spec_parse");
     group.bench_function("caret", |b| {
-        b.iter(|| NpmVersionSpec::parse(black_box("^1.2.3")))
+        b.iter(|| VersionSpec::parse(black_box("^1.2.3"), PackageType::Npm))
     });
     group.bench_function("tilde", |b| {
-        b.iter(|| NpmVersionSpec::parse(black_box("~1.2.3")))
+        b.iter(|| VersionSpec::parse(black_box("~1.2.3"), PackageType::Npm))
     });
     group.bench_function("range", |b| {
-        b.iter(|| NpmVersionSpec::parse(black_box(">=1.0.0 <2.0.0")))
+        b.iter(|| VersionSpec::parse(black_box(">=1.0.0 <2.0.0"), PackageType::Npm))
     });
     group.bench_function("or", |b| {
-        b.iter(|| NpmVersionSpec::parse(black_box("^1.0.0 || ^2.0.0")))
+        b.iter(|| VersionSpec::parse(black_box("^1.0.0 || ^2.0.0"), PackageType::Npm))
     });
     group.bench_function("star", |b| {
-        b.iter(|| NpmVersionSpec::parse(black_box("*")))
+        b.iter(|| VersionSpec::parse(black_box("*"), PackageType::Npm))
     });
     group.bench_function("exact", |b| {
-        b.iter(|| NpmVersionSpec::parse(black_box("1.2.3")))
+        b.iter(|| VersionSpec::parse(black_box("1.2.3"), PackageType::Npm))
     });
     group.finish();
 }
@@ -48,19 +46,19 @@ fn bench_npm_version_spec_parse(c: &mut Criterion) {
 fn bench_jsr_version_spec_parse(c: &mut Criterion) {
     let mut group = c.benchmark_group("jsr_version_spec_parse");
     group.bench_function("caret", |b| {
-        b.iter(|| JsrVersionSpec::parse(black_box("^1.2.3")))
+        b.iter(|| VersionSpec::parse(black_box("^1.2.3"), PackageType::Jsr))
     });
     group.bench_function("tilde", |b| {
-        b.iter(|| JsrVersionSpec::parse(black_box("~1.2.3")))
+        b.iter(|| VersionSpec::parse(black_box("~1.2.3"), PackageType::Jsr))
     });
     group.bench_function("range", |b| {
-        b.iter(|| JsrVersionSpec::parse(black_box(">=1.0.0 <2.0.0")))
+        b.iter(|| VersionSpec::parse(black_box(">=1.0.0 <2.0.0"), PackageType::Jsr))
     });
     group.bench_function("star", |b| {
-        b.iter(|| JsrVersionSpec::parse(black_box("*")))
+        b.iter(|| VersionSpec::parse(black_box("*"), PackageType::Jsr))
     });
     group.bench_function("exact", |b| {
-        b.iter(|| JsrVersionSpec::parse(black_box("1.2.3")))
+        b.iter(|| VersionSpec::parse(black_box("1.2.3"), PackageType::Jsr))
     });
     group.finish();
 }
@@ -68,13 +66,13 @@ fn bench_jsr_version_spec_parse(c: &mut Criterion) {
 fn bench_npm_package_req_parse(c: &mut Criterion) {
     let mut group = c.benchmark_group("npm_package_req_parse");
     group.bench_function("simple", |b| {
-        b.iter(|| NpmPackageReq::parse(black_box("lodash@^4.17.0")))
+        b.iter(|| PackageReq::parse_npm(black_box("lodash@^4.17.0")))
     });
     group.bench_function("scoped", |b| {
-        b.iter(|| NpmPackageReq::parse(black_box("@babel/core@^7.0.0")))
+        b.iter(|| PackageReq::parse_npm(black_box("@babel/core@^7.0.0")))
     });
     group.bench_function("no_version", |b| {
-        b.iter(|| NpmPackageReq::parse(black_box("express")))
+        b.iter(|| PackageReq::parse_npm(black_box("express")))
     });
     group.finish();
 }
@@ -82,10 +80,10 @@ fn bench_npm_package_req_parse(c: &mut Criterion) {
 fn bench_jsr_package_req_parse(c: &mut Criterion) {
     let mut group = c.benchmark_group("jsr_package_req_parse");
     group.bench_function("basic", |b| {
-        b.iter(|| JsrPackageReq::parse(black_box("@std/path@^1.0.0")))
+        b.iter(|| PackageReq::parse_jsr(black_box("@std/path@^1.0.0")))
     });
     group.bench_function("no_version", |b| {
-        b.iter(|| JsrPackageReq::parse(black_box("@std/fs")))
+        b.iter(|| PackageReq::parse_jsr(black_box("@std/fs")))
     });
     group.finish();
 }
@@ -107,10 +105,10 @@ fn bench_package_req_parse(c: &mut Criterion) {
 fn bench_matches(c: &mut Criterion) {
     let mut group = c.benchmark_group("matches");
 
-    let npm_spec = NpmVersionSpec::parse("^1.0.0").unwrap();
-    let jsr_spec = JsrVersionSpec::parse("^1.0.0").unwrap();
-    let npm_req = NpmPackageReq::parse("lodash@^4.0.0").unwrap();
-    let jsr_req = JsrPackageReq::parse("@std/path@^1.0.0").unwrap();
+    let npm_spec = VersionSpec::parse("^1.0.0", PackageType::Npm).unwrap();
+    let jsr_spec = VersionSpec::parse("^1.0.0", PackageType::Jsr).unwrap();
+    let npm_req = PackageReq::parse_npm("lodash@^4.0.0").unwrap();
+    let jsr_req = PackageReq::parse_jsr("@std/path@^1.0.0").unwrap();
     let pkg_req = PackageReq::parse("lodash@>=1.0.0 <3.0.0").unwrap();
 
     let v_match = Version::parse("1.5.0").unwrap();

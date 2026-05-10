@@ -1,10 +1,10 @@
-use crate::{Version, VersionRangeKind};
+use crate::{Version, VersionRange};
 
 use super::{AliasSpec, FileSpec, GitSpec, TagSpec, UrlSpec, WorkspaceSpec};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum VersionSpecKind {
-    Range(VersionRangeKind),
+    Range(VersionRange),
     Tag(TagSpec),
     Workspace(WorkspaceSpec),
     File(FileSpec),
@@ -18,17 +18,6 @@ impl VersionSpecKind {
         match self {
             Self::Range(range) => range.matches(version),
             _ => false,
-        }
-    }
-
-    pub fn is_registry_range(&self) -> bool {
-        matches!(self, Self::Range(_))
-    }
-
-    pub fn as_version_range(&self) -> Option<&VersionRangeKind> {
-        match self {
-            Self::Range(range) => Some(range),
-            _ => None,
         }
     }
 }

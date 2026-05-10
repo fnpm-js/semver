@@ -1,55 +1,83 @@
-use crate::{PackageType, Version};
-
 mod comparator;
-mod jsr;
 mod kind;
-mod npm;
 
-pub use jsr::JsrVersionRange;
-pub use kind::VersionRangeKind;
-pub use npm::NpmVersionRange;
+pub(crate) use kind::VersionRangeKind;
 
-#[allow(dead_code)]
-pub(crate) trait VersionRangeTrait {
-    fn matches(&self, version: &Version) -> bool;
-    fn raw(&self) -> &str;
-    fn canonical(&self) -> String;
-    fn package_type(&self) -> PackageType;
-}
+use std::{fmt, str::FromStr};
+
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
+use smol_str::SmolStr;
+
+use crate::{
+    PackageType, Version,
+    error::{Error, Result},
+};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum PackageVersionRange {
-    Npm(NpmVersionRange),
-    Jsr(JsrVersionRange),
+pub struct VersionRange {
+    pub(crate) raw: SmolStr,
+    pub(crate) kind: VersionRangeKind,
+    pub(crate) package_type: PackageType,
 }
 
-impl PackageVersionRange {
-    pub fn matches(&self, version: &Version) -> bool {
-        match self {
-            Self::Npm(r) => r.matches(version),
-            Self::Jsr(r) => r.matches(version),
-        }
+impl VersionRange {
+    pub fn parse(input: &str, package_type: PackageType) -> Result<Self> {
+        let raw = input.trim();
+        let kind = VersionRangeKind::parse(raw, package_type)?;
+        Ok(Self {
+            raw: SmolStr::new(raw),
+            kind,
+            package_type,
+        })
     }
 
-    pub fn raw(&self) -> &str {
-        match self {
-            Self::Npm(r) => r.as_str(),
-            Self::Jsr(r) => r.as_str(),
-        }
+    pub fn matches(&self, version: &Version) -> bool {
+        self.kind.matches(version)
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.raw
     }
 
     pub fn canonical(&self) -> String {
-        match self {
-            Self::Npm(r) => r.canonical(),
-            Self::Jsr(r) => r.canonical(),
-        }
+        self.kind.canonical()
     }
 
     pub fn package_type(&self) -> PackageType {
-        match self {
-            Self::Npm(_) => PackageType::Npm,
-            Self::Jsr(_) => PackageType::Jsr,
-        }
+        self.package_type
+    }
+}
+
+impl fmt::Display for VersionRange {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.raw)
+    }
+}
+
+impl FromStr for VersionRange {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self> {
+        Self::parse(s, PackageType::Npm)
+    }
+}
+
+impl Serialize for VersionRange {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for VersionRange {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::parse(&value, PackageType::Npm).map_err(de::Error::custom)
     }
 }
 
@@ -58,73 +86,245 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_package_version_range_npm() {
-        let npm_range = NpmVersionRange::parse("^1.0.0").unwrap();
-        let pkg_range = PackageVersionRange::Npm(npm_range);
+    fn test_npm_basic() {
+        let range = VersionRange::parse("^1.0.0", PackageType::Npm).unwrap();
+        assert_eq!(range.as_str(), "^1.0.0");
+        assert_eq!(range.package_type(), PackageType::Npm);
 
-        assert_eq!(pkg_range.raw(), "^1.0.0");
-        assert_eq!(pkg_range.package_type(), PackageType::Npm);
-
-        let v1 = Version::parse("1.5.0").unwrap();
-        let v2 = Version::parse("2.0.0").unwrap();
-        assert!(pkg_range.matches(&v1));
-        assert!(!pkg_range.matches(&v2));
+        assert!(range.matches(&Version::parse("1.5.0").unwrap()));
+        assert!(!range.matches(&Version::parse("2.0.0").unwrap()));
     }
 
     #[test]
-    fn test_package_version_range_npm_canonical() {
-        let range = NpmVersionRange::parse("^1.2.3").unwrap();
-        let pkg_range = PackageVersionRange::Npm(range);
-        assert_eq!(pkg_range.canonical(), "^1.2.3");
+    fn test_npm_canonical() {
+        let range = VersionRange::parse("^1.2.3", PackageType::Npm).unwrap();
+        assert_eq!(range.canonical(), "^1.2.3");
     }
 
     #[test]
-    fn test_package_version_range_npm_any() {
-        let range = NpmVersionRange::parse("*").unwrap();
-        let pkg_range = PackageVersionRange::Npm(range);
-
-        assert_eq!(pkg_range.canonical(), "*");
-        assert!(pkg_range.matches(&Version::parse("0.0.1").unwrap()));
-        assert!(pkg_range.matches(&Version::parse("99.99.99").unwrap()));
+    fn test_npm_any() {
+        let range = VersionRange::parse("*", PackageType::Npm).unwrap();
+        assert_eq!(range.canonical(), "*");
+        assert!(range.matches(&Version::parse("0.0.1").unwrap()));
+        assert!(range.matches(&Version::parse("99.99.99").unwrap()));
     }
 
     #[test]
-    fn test_package_version_range_npm_exact() {
-        let range = NpmVersionRange::parse("1.2.3").unwrap();
-        let pkg_range = PackageVersionRange::Npm(range);
-
-        assert_eq!(pkg_range.raw(), "1.2.3");
-        assert_eq!(pkg_range.canonical(), "1.2.3");
-        assert!(pkg_range.matches(&Version::parse("1.2.3").unwrap()));
-        assert!(!pkg_range.matches(&Version::parse("1.2.4").unwrap()));
+    fn test_npm_exact() {
+        let range = VersionRange::parse("1.2.3", PackageType::Npm).unwrap();
+        assert_eq!(range.as_str(), "1.2.3");
+        assert_eq!(range.canonical(), "1.2.3");
+        assert!(range.matches(&Version::parse("1.2.3").unwrap()));
+        assert!(!range.matches(&Version::parse("1.2.4").unwrap()));
     }
 
     #[test]
-    fn test_package_version_range_jsr() {
-        let jsr_range = JsrVersionRange::parse("^1.0.0").unwrap();
-        let pkg_range = PackageVersionRange::Jsr(jsr_range);
-
-        assert_eq!(pkg_range.raw(), "^1.0.0");
-        assert_eq!(pkg_range.package_type(), PackageType::Jsr);
-
-        assert!(pkg_range.matches(&Version::parse("1.5.0").unwrap()));
-        assert!(!pkg_range.matches(&Version::parse("2.0.0").unwrap()));
+    fn test_npm_exact_with_equals() {
+        let range = VersionRange::parse("=1.2.3", PackageType::Npm).unwrap();
+        assert_eq!(range.as_str(), "=1.2.3");
+        assert_eq!(range.canonical(), "1.2.3");
+        assert!(range.matches(&Version::parse("1.2.3").unwrap()));
     }
 
     #[test]
-    fn test_package_version_range_jsr_canonical() {
-        let range = JsrVersionRange::parse("^1.2.3").unwrap();
-        let pkg_range = PackageVersionRange::Jsr(range);
-        assert_eq!(pkg_range.canonical(), "^1.2.3");
+    fn test_npm_caret() {
+        let range = VersionRange::parse("^1.2.3", PackageType::Npm).unwrap();
+        assert!(range.matches(&Version::parse("1.2.3").unwrap()));
+        assert!(range.matches(&Version::parse("1.9.9").unwrap()));
+        assert!(!range.matches(&Version::parse("2.0.0").unwrap()));
+        assert!(!range.matches(&Version::parse("1.2.2").unwrap()));
     }
 
     #[test]
-    fn test_package_version_range_jsr_any() {
-        let range = JsrVersionRange::parse("*").unwrap();
-        let pkg_range = PackageVersionRange::Jsr(range);
+    fn test_npm_tilde() {
+        let range = VersionRange::parse("~1.2.3", PackageType::Npm).unwrap();
+        assert!(range.matches(&Version::parse("1.2.3").unwrap()));
+        assert!(range.matches(&Version::parse("1.2.9").unwrap()));
+        assert!(!range.matches(&Version::parse("1.3.0").unwrap()));
+    }
 
-        assert_eq!(pkg_range.canonical(), "*");
-        assert!(pkg_range.matches(&Version::parse("0.0.1").unwrap()));
-        assert!(pkg_range.matches(&Version::parse("99.99.99").unwrap()));
+    #[test]
+    fn test_npm_gte() {
+        let range = VersionRange::parse(">=1.2.3", PackageType::Npm).unwrap();
+        assert!(range.matches(&Version::parse("1.2.3").unwrap()));
+        assert!(range.matches(&Version::parse("2.0.0").unwrap()));
+        assert!(!range.matches(&Version::parse("1.2.2").unwrap()));
+    }
+
+    #[test]
+    fn test_npm_wildcard_major() {
+        let range = VersionRange::parse("1.x", PackageType::Npm).unwrap();
+        assert!(range.matches(&Version::parse("1.0.0").unwrap()));
+        assert!(range.matches(&Version::parse("1.9.9").unwrap()));
+        assert!(!range.matches(&Version::parse("2.0.0").unwrap()));
+    }
+
+    #[test]
+    fn test_npm_wildcard_minor() {
+        let range = VersionRange::parse("1.2.x", PackageType::Npm).unwrap();
+        assert!(range.matches(&Version::parse("1.2.0").unwrap()));
+        assert!(range.matches(&Version::parse("1.2.9").unwrap()));
+        assert!(!range.matches(&Version::parse("1.3.0").unwrap()));
+    }
+
+    #[test]
+    fn test_npm_multiple_comparators() {
+        let range = VersionRange::parse(">=1.0.0 <2.0.0", PackageType::Npm).unwrap();
+        assert!(range.matches(&Version::parse("1.0.0").unwrap()));
+        assert!(range.matches(&Version::parse("1.9.9").unwrap()));
+        assert!(!range.matches(&Version::parse("2.0.0").unwrap()));
+        assert!(!range.matches(&Version::parse("0.9.9").unwrap()));
+    }
+
+    #[test]
+    fn test_npm_or() {
+        let range = VersionRange::parse("^1.0.0 || ^2.0.0", PackageType::Npm).unwrap();
+        assert!(range.matches(&Version::parse("1.5.0").unwrap()));
+        assert!(range.matches(&Version::parse("2.3.0").unwrap()));
+        assert!(!range.matches(&Version::parse("3.0.0").unwrap()));
+        assert!(!range.matches(&Version::parse("0.9.0").unwrap()));
+    }
+
+    #[test]
+    fn test_npm_or_with_ranges() {
+        let range = VersionRange::parse(">=1.0.0 <1.5.0 || >=2.0.0", PackageType::Npm).unwrap();
+        assert!(range.matches(&Version::parse("1.0.0").unwrap()));
+        assert!(range.matches(&Version::parse("1.4.9").unwrap()));
+        assert!(!range.matches(&Version::parse("1.5.0").unwrap()));
+        assert!(range.matches(&Version::parse("2.0.0").unwrap()));
+        assert!(range.matches(&Version::parse("99.0.0").unwrap()));
+    }
+
+    #[test]
+    fn test_npm_or_exact() {
+        let range = VersionRange::parse("1.0.0 || 2.0.0", PackageType::Npm).unwrap();
+        assert!(range.matches(&Version::parse("1.0.0").unwrap()));
+        assert!(range.matches(&Version::parse("2.0.0").unwrap()));
+        assert!(!range.matches(&Version::parse("1.0.1").unwrap()));
+        assert!(!range.matches(&Version::parse("3.0.0").unwrap()));
+    }
+
+    #[test]
+    fn test_npm_empty_error() {
+        assert!(VersionRange::parse("", PackageType::Npm).is_err());
+        assert!(VersionRange::parse("   ", PackageType::Npm).is_err());
+    }
+
+    #[test]
+    fn test_npm_unsupported_hyphen() {
+        assert!(VersionRange::parse("1.0.0 - 2.0.0", PackageType::Npm).is_err());
+    }
+
+    #[test]
+    fn test_npm_unsupported_v_prefix() {
+        assert!(VersionRange::parse("v1.0.0", PackageType::Npm).is_err());
+    }
+
+    #[test]
+    fn test_jsr_basic() {
+        let range = VersionRange::parse("^1.0.0", PackageType::Jsr).unwrap();
+        assert_eq!(range.as_str(), "^1.0.0");
+        assert_eq!(range.package_type(), PackageType::Jsr);
+        assert!(range.matches(&Version::parse("1.5.0").unwrap()));
+        assert!(!range.matches(&Version::parse("2.0.0").unwrap()));
+    }
+
+    #[test]
+    fn test_jsr_canonical() {
+        let range = VersionRange::parse("^1.2.3", PackageType::Jsr).unwrap();
+        assert_eq!(range.canonical(), "^1.2.3");
+    }
+
+    #[test]
+    fn test_jsr_any() {
+        let range = VersionRange::parse("*", PackageType::Jsr).unwrap();
+        assert_eq!(range.canonical(), "*");
+        assert!(range.matches(&Version::parse("0.0.1").unwrap()));
+        assert!(range.matches(&Version::parse("99.99.99").unwrap()));
+    }
+
+    #[test]
+    fn test_jsr_exact() {
+        let range = VersionRange::parse("1.2.3", PackageType::Jsr).unwrap();
+        assert_eq!(range.canonical(), "1.2.3");
+        assert!(range.matches(&Version::parse("1.2.3").unwrap()));
+        assert!(!range.matches(&Version::parse("1.2.4").unwrap()));
+    }
+
+    #[test]
+    fn test_jsr_caret() {
+        let range = VersionRange::parse("^1.2.3", PackageType::Jsr).unwrap();
+        assert!(range.matches(&Version::parse("1.2.3").unwrap()));
+        assert!(range.matches(&Version::parse("1.9.9").unwrap()));
+        assert!(!range.matches(&Version::parse("2.0.0").unwrap()));
+        assert!(!range.matches(&Version::parse("1.2.2").unwrap()));
+    }
+
+    #[test]
+    fn test_jsr_tilde() {
+        let range = VersionRange::parse("~1.2.3", PackageType::Jsr).unwrap();
+        assert!(range.matches(&Version::parse("1.2.3").unwrap()));
+        assert!(range.matches(&Version::parse("1.2.9").unwrap()));
+        assert!(!range.matches(&Version::parse("1.3.0").unwrap()));
+    }
+
+    #[test]
+    fn test_jsr_gte() {
+        let range = VersionRange::parse(">=1.0.0", PackageType::Jsr).unwrap();
+        assert!(range.matches(&Version::parse("1.0.0").unwrap()));
+        assert!(range.matches(&Version::parse("2.0.0").unwrap()));
+        assert!(!range.matches(&Version::parse("0.9.9").unwrap()));
+    }
+
+    #[test]
+    fn test_jsr_multiple_comparators() {
+        let range = VersionRange::parse(">=1.0.0 <2.0.0", PackageType::Jsr).unwrap();
+        assert!(range.matches(&Version::parse("1.0.0").unwrap()));
+        assert!(range.matches(&Version::parse("1.9.9").unwrap()));
+        assert!(!range.matches(&Version::parse("2.0.0").unwrap()));
+    }
+
+    #[test]
+    fn test_jsr_wildcard() {
+        let range = VersionRange::parse("1.x", PackageType::Jsr).unwrap();
+        assert!(range.matches(&Version::parse("1.0.0").unwrap()));
+        assert!(range.matches(&Version::parse("1.9.9").unwrap()));
+        assert!(!range.matches(&Version::parse("2.0.0").unwrap()));
+    }
+
+    #[test]
+    fn test_jsr_or() {
+        let range = VersionRange::parse("^1.0.0 || ^2.0.0", PackageType::Jsr).unwrap();
+        assert!(range.matches(&Version::parse("1.5.0").unwrap()));
+        assert!(range.matches(&Version::parse("2.3.0").unwrap()));
+        assert!(!range.matches(&Version::parse("3.0.0").unwrap()));
+    }
+
+    #[test]
+    fn test_jsr_empty_error() {
+        assert!(VersionRange::parse("", PackageType::Jsr).is_err());
+        assert!(VersionRange::parse("   ", PackageType::Jsr).is_err());
+    }
+
+    #[test]
+    fn test_serde_roundtrip() {
+        let range = VersionRange::parse("^1.2.3", PackageType::Npm).unwrap();
+        let json = serde_json::to_string(&range).unwrap();
+        assert_eq!(json, "\"^1.2.3\"");
+
+        let deserialized: VersionRange = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, range);
+    }
+
+    #[test]
+    fn test_display() {
+        let range = VersionRange::parse("^1.2.3", PackageType::Npm).unwrap();
+        assert_eq!(range.to_string(), "^1.2.3");
+    }
+
+    #[test]
+    fn test_from_str() {
+        let range: VersionRange = "~1.2.3".parse().unwrap();
+        assert_eq!(range.as_str(), "~1.2.3");
     }
 }

@@ -5,10 +5,9 @@ mod spec;
 mod version;
 
 pub use error::{Error, Result};
-pub use package::{JsrPackageReq, NpmPackageReq, PackageReq, PackageType};
-pub use range::{JsrVersionRange, NpmVersionRange, PackageVersionRange, VersionRangeKind};
+pub use package::{PackageReq, PackageType};
+pub use range::VersionRange;
 pub use spec::{
-    AliasSpec, FileSpec, GitSpec, JsrVersionSpec, NpmVersionSpec, PackageVersionSpec, TagSpec,
-    UrlSpec, VersionSpecKind, WorkspaceSpec,
+    AliasSpec, FileSpec, GitSpec, TagSpec, UrlSpec, VersionSpec, WorkspaceSpec,
 };
 pub use version::Version;
