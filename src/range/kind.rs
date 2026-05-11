@@ -3,10 +3,7 @@ use std::fmt;
 use ecow::EcoVec;
 
 use super::comparator::ComparatorSet;
-use crate::{
-    PackageType, Version,
-    error::{Error, Result},
-};
+use crate::{Version, error::{Error, Result}};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum VersionRangeKind {
@@ -16,7 +13,7 @@ pub enum VersionRangeKind {
 }
 
 impl VersionRangeKind {
-    pub fn parse(input: &str, package_type: PackageType) -> Result<Self> {
+    pub fn parse(input: &str) -> Result<Self> {
         let raw = input.trim();
         if raw.is_empty() {
             return Err(Error::EmptySpec);
@@ -24,7 +21,6 @@ impl VersionRangeKind {
         if raw.contains(" - ") || raw.starts_with('v') {
             return Err(Error::UnsupportedRangeSyntax {
                 input: input.to_string(),
-                package_type,
             });
         }
         if raw == "*" {
@@ -46,7 +42,6 @@ impl VersionRangeKind {
             let set =
                 ComparatorSet::parse(segment).ok_or_else(|| Error::InvalidVersionRange {
                     input: input.to_string(),
-                    package_type,
                 })?;
             sets.push(set);
         }
@@ -54,7 +49,6 @@ impl VersionRangeKind {
         if sets.is_empty() {
             return Err(Error::InvalidVersionRange {
                 input: input.to_string(),
-                package_type,
             });
         }
 
