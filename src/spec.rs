@@ -1,19 +1,6 @@
-mod alias;
-mod file;
-mod git;
-mod kind;
 mod tag;
-mod url;
-mod workspace;
 
-pub use alias::AliasSpec;
-pub use file::FileSpec;
-pub use git::GitSpec;
 pub use tag::TagSpec;
-pub use url::UrlSpec;
-pub use workspace::WorkspaceSpec;
-
-pub(crate) use kind::VersionSpecKind;
 
 use std::{fmt, str::FromStr};
 
@@ -23,8 +10,13 @@ use smol_str::SmolStr;
 use crate::{
     PackageType, Version, VersionRange,
     error::{Error, Result},
-    range::VersionRangeKind,
 };
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum VersionSpecKind {
+    Range(VersionRange),
+    Tag(TagSpec),
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct VersionSpec {
@@ -46,16 +38,15 @@ impl VersionSpec {
         &self.raw
     }
 
-    pub fn kind(&self) -> &VersionSpecKind {
-        &self.kind
-    }
-
     pub fn package_type(&self) -> PackageType {
         self.package_type
     }
 
     pub fn matches(&self, version: &Version) -> bool {
-        self.kind.matches(version)
+        match &self.kind {
+            VersionSpecKind::Range(range) => range.matches(version),
+            VersionSpecKind::Tag(_) => false,
+        }
     }
 
     pub fn as_tag(&self) -> Option<&TagSpec> {
@@ -75,47 +66,22 @@ impl VersionSpec {
 
 impl VersionSpec {
     pub(crate) fn parse_npm(input: &str) -> Result<Self> {
-        let raw = input.trim();
-        if raw.is_empty() {
-            return Err(Error::EmptySpec);
-        }
-
-        let package_type = PackageType::Npm;
-        let err = || Error::InvalidVersionSpec {
-            input: input.to_string(),
-        };
-        let kind = if let Some(rest) = raw.strip_prefix("workspace:") {
-            if rest.is_empty() { return Err(err()); }
-            VersionSpecKind::Workspace(WorkspaceSpec::new(rest))
-        } else if let Some(rest) = raw.strip_prefix("file:") {
-            if rest.is_empty() { return Err(err()); }
-            VersionSpecKind::File(FileSpec::new(rest))
-        } else if let Some(rest) = raw.strip_prefix("npm:") {
-            if rest.is_empty() { return Err(err()); }
-            VersionSpecKind::Alias(parse_alias(rest, input)?)
-        } else if is_git_spec(raw) {
-            VersionSpecKind::Git(GitSpec::new(raw))
-        } else if is_url_spec(raw) {
-            VersionSpecKind::Url(UrlSpec::parse(raw).map_err(|_| err())?)
-        } else {
-            try_parse_range_or_tag(raw, package_type)?
-        };
-
-        Ok(Self {
-            raw: SmolStr::new(raw),
-            kind,
-            package_type,
-        })
+        Self::parse_range_or_tag(input, PackageType::Npm)
     }
 
     pub(crate) fn parse_jsr(input: &str) -> Result<Self> {
+        Self::parse_range_or_tag(input, PackageType::Jsr)
+    }
+
+    fn parse_range_or_tag(input: &str, package_type: PackageType) -> Result<Self> {
         let raw = input.trim();
         if raw.is_empty() {
             return Err(Error::EmptySpec);
         }
 
-        let package_type = PackageType::Jsr;
-        let kind = try_parse_range_or_tag(raw, package_type)?;
+        let kind = VersionRange::parse(raw, package_type)
+            .map(VersionSpecKind::Range)
+            .or_else(|_| TagSpec::parse(raw).map(VersionSpecKind::Tag))?;
 
         Ok(Self {
             raw: SmolStr::new(raw),
@@ -123,63 +89,6 @@ impl VersionSpec {
             package_type,
         })
     }
-}
-
-fn try_parse_range_or_tag(raw: &str, package_type: PackageType) -> Result<VersionSpecKind> {
-    if let Ok(range_kind) = VersionRangeKind::parse(raw, package_type) {
-        Ok(VersionSpecKind::Range(VersionRange {
-            raw: SmolStr::new(raw),
-            kind: range_kind,
-            package_type,
-        }))
-    } else {
-        Ok(VersionSpecKind::Tag(TagSpec::parse(raw)?))
-    }
-}
-
-fn parse_alias(value: &str, input: &str) -> Result<AliasSpec> {
-    if value.is_empty() {
-        return Err(Error::InvalidVersionSpec {
-            input: input.to_string(),
-        });
-    }
-
-    let at_index = if let Some(stripped) = value.strip_prefix('@') {
-        stripped.find('@').map(|index| index + 1)
-    } else {
-        value.find('@')
-    };
-
-    let Some(at_index) = at_index else {
-        return Err(Error::InvalidVersionSpec {
-            input: input.to_string(),
-        });
-    };
-
-    let (package, req) = value.split_at(at_index);
-    let req = &req[1..];
-    if package.is_empty() || req.is_empty() {
-        return Err(Error::InvalidVersionSpec {
-            input: input.to_string(),
-        });
-    }
-
-    let req = VersionSpec::parse_npm(req)?;
-    Ok(AliasSpec::new(package, req))
-}
-
-fn is_git_spec(input: &str) -> bool {
-    input.starts_with("git:")
-        || input.starts_with("git+ssh:")
-        || input.starts_with("git+https:")
-        || input.starts_with("ssh:")
-        || input.starts_with("github:")
-        || input.starts_with("gitlab:")
-        || input.starts_with("bitbucket:")
-}
-
-fn is_url_spec(input: &str) -> bool {
-    input.starts_with("http://") || input.starts_with("https://")
 }
 
 impl fmt::Display for VersionSpec {
@@ -309,5 +218,12 @@ mod tests {
     #[test]
     fn test_jsr_empty_error() {
         assert!(VersionSpec::parse("", PackageType::Jsr).is_err());
+    }
+
+    #[test]
+    fn test_npm_non_semver_sources_fail() {
+        assert!(VersionSpec::parse("workspace:*", PackageType::Npm).is_err());
+        assert!(VersionSpec::parse("file:../pkg", PackageType::Npm).is_err());
+        assert!(VersionSpec::parse("https://example.com/pkg.tgz", PackageType::Npm).is_err());
     }
 }

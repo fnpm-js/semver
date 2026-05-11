@@ -14,6 +14,7 @@ impl TagSpec {
         if tag.is_empty()
             || tag.starts_with('.')
             || tag.contains('/')
+            || tag.contains(':')
             || tag.chars().any(char::is_whitespace)
             || tag == "*"
         {
